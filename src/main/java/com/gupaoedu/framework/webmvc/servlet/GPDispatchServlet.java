@@ -1,6 +1,7 @@
 package com.gupaoedu.framework.webmvc.servlet;
 
 import com.gupaoedu.framework.annotation.*;
+import com.gupaoedu.framework.context.MyApplicationContext;
 
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
@@ -20,10 +21,7 @@ import java.io.File;
  * Created by Tom.
  */
 public class GPDispatchServlet extends HttpServlet {
-    private Properties contextConfig = new Properties();
-
-    //享元模式，缓存
-    private List<String> classNames = new ArrayList<String>();
+    private MyApplicationContext applicationContext;
 
     //IoC容器，key默认是类名首字母小写，value就是对应的实例对象
     private Map<String,Object> ioc = new HashMap<String,Object>();
@@ -103,21 +101,7 @@ public class GPDispatchServlet extends HttpServlet {
 
     @Override
     public void init(ServletConfig config) throws ServletException {
-        //1、加载配置文件
-        doLoadConfig(config.getInitParameter("contextConfigLocation"));
-
-        //2、扫描相关的类
-        doScanner(contextConfig.getProperty("scanPackage"));
-
-        //==============IoC部分==============
-        //3、初始化IoC容器，将扫描到的相关的类实例化，保存到IcC容器中
-        doInstance();
-
-        //AOP，新生成的代理对象
-
-        //==============DI部分==============
-        //4、完成依赖注入
-        doAutowired();
+        applicationContext = new MyApplicationContext(config.getInitParameter("contextConfigLocation"));
 
         //==============MVC部分==============
         //5、初始化HandlerMapping
@@ -157,82 +141,6 @@ public class GPDispatchServlet extends HttpServlet {
         }
     }
 
-    private void doAutowired() {
-        if(ioc.isEmpty()){return;}
-
-        for (Map.Entry<String,Object> entry : ioc.entrySet()) {
-
-            //把所有的包括private/protected/default/public 修饰字段都取出来
-            for (Field field : entry.getValue().getClass().getDeclaredFields()) {
-                if(!field.isAnnotationPresent(GPAutowired.class)){ continue; }
-
-                GPAutowired autowired = field.getAnnotation(GPAutowired.class);
-
-                //如果用户没有自定义的beanName，就默认根据类型注入
-                String beanName = autowired.value().trim();
-                if("".equals(beanName)){
-                    //field.getType().getName() 获取字段的类型
-                    beanName = field.getType().getName();
-                }
-
-                //暴力访问
-                field.setAccessible(true);
-
-                try {
-                    //ioc.get(beanName) 相当于通过接口的全名拿到接口的实现的实例
-                    field.set(entry.getValue(),ioc.get(beanName));
-                } catch (IllegalAccessException e) {
-                    e.printStackTrace();
-                }
-            }
-
-        }
-    }
-
-    private void doInstance() {
-        if(classNames.isEmpty()){return;}
-
-        try {
-            for (String className : classNames) {
-                Class<?> clazz = Class.forName(className);
-
-                if(clazz.isAnnotationPresent(GPController.class)) {
-                    //key提取出来了，把value也搞出来
-                    String beanName = toLowerFirstCase(clazz.getSimpleName());
-                    Object instance = clazz.newInstance();
-                    ioc.put(beanName, instance);
-                }else if(clazz.isAnnotationPresent(GPService.class)){
-                    //1、在多个包下出现相同的类名，只能寄几（自己）起一个全局唯一的名字
-                    //自定义命名
-                    String beanName = clazz.getAnnotation(GPService.class).value();
-                    if("".equals(beanName.trim())){
-                        beanName = toLowerFirstCase(clazz.getSimpleName());
-                    }
-
-                    //2、默认的类名首字母小写
-                    Object instance = clazz.newInstance();
-                    ioc.put(beanName, instance);
-
-                    //3、如果是接口
-                    //判断有多少个实现类，如果只有一个，默认就选择这个实现类
-                    //如果有多个，只能抛异常
-                    for (Class<?> i : clazz.getInterfaces()) {
-                        if(ioc.containsKey(i.getName())){
-                            throw new Exception("The " + i.getName() + " is exists!!");
-                        }
-                        ioc.put(i.getName(),instance);
-                    }
-
-                }else{
-                    continue;
-                }
-            }
-        }catch (Exception e){
-            e.printStackTrace();
-        }
-
-    }
-
     //自己写，自己用
     private String toLowerFirstCase(String simpleName) {
         char [] chars = simpleName.toCharArray();
@@ -241,39 +149,4 @@ public class GPDispatchServlet extends HttpServlet {
         return String.valueOf(chars);
     }
 
-    private void doScanner(String scanPackage) {
-        //jar 、 war 、zip 、rar
-        URL url = this.getClass().getClassLoader().getResource("/" + scanPackage.replaceAll("\\.","/"));
-        File classPath = new File(url.getFile());
-
-        //当成是一个ClassPath文件夹
-        for (File file : classPath.listFiles()) {
-            if(file.isDirectory()){
-                doScanner(scanPackage + "." + file.getName());
-            }else {
-                if(!file.getName().endsWith(".class")){continue;}
-                //全类名 = 包名.类名
-                String className = (scanPackage + "." + file.getName().replace(".class", ""));
-                //Class.forName(className);
-                classNames.add(className);
-            }
-        }
-    }
-
-    private void doLoadConfig(String contextConfigLocation) {
-        InputStream is = this.getClass().getClassLoader().getResourceAsStream(contextConfigLocation);
-        try {
-            contextConfig.load(is);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }finally {
-            if(null != is){
-                try {
-                    is.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-    }
 }
